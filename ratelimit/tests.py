@@ -3,6 +3,7 @@ from django.core.exceptions import ImproperlyConfigured
 from django.test import RequestFactory, TestCase
 from django.test.utils import override_settings
 from django.views.generic import View
+from django.core.cache.backends import dummy
 
 from ratelimit.decorators import ratelimit
 from ratelimit.exceptions import Ratelimited
@@ -20,6 +21,13 @@ class MockUser(object):
 
     def is_authenticated(self):
         return self.authenticated
+
+
+class EvictingCache(dummy.DummyCache):
+    ''' Does not actually add a key when key is added.
+    Used to test what happens when key is evicted from cache. '''
+    def add(self, key, value, timeout=0, version=None):
+        return False
 
 
 class RateParsingTests(TestCase):
@@ -387,6 +395,20 @@ class RatelimitTests(TestCase):
         # Count = 2, 2 > 1.
         assert do_increment(req), 'Request should be rate limited.'
         assert not_increment(req), 'Request should be rate limited.'
+
+    @override_settings(CACHES={'default': {'BACKEND': 'ratelimit.tests.EvictingCache'}})
+    def test_key_evicted_from_cache(self):
+        def get_key(group, request):
+            return 'test_key_evicted_from_cache'
+
+        def do_increment(request):
+            return is_ratelimited(request, increment=True,
+                                  method=is_ratelimited.ALL,
+                                  key=get_key,
+                                  rate='1/m', group='a')
+        req = rf.get('/')
+        # Make sure does not raise ValueError due to non-existent key
+        do_increment(req)
 
 
 class RatelimitCBVTests(TestCase):
